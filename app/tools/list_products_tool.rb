@@ -2,9 +2,16 @@ class ListProductsTool < ApplicationTool
   description "List products in the store catalog, optionally filtered by " \
               "a title search term and/or stock availability."
 
+  annotations(
+    read_only_hint: true,
+    destructive_hint: false,
+    idempotent_hint: true,
+    open_world_hint: false
+  )
+
   arguments do
-    optional(:search).maybe(:string).description("Case-insensitive substring to match against product titles")
-    optional(:in_stock_only).maybe(:bool).description("If true, only return products with stock_quantity > 0")
+    optional(:search).filled(:string).description("Case-insensitive substring to match against product titles")
+    optional(:in_stock_only).filled(:bool).description("If true, only return products with stock_quantity > 0")
     optional(:limit).filled(:integer).description("Max number of products to return (default 20)")
   end
 

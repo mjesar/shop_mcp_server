@@ -25,6 +25,7 @@ class CreateOrderTool < ApplicationTool
       order = Order.create!(customer_name: customer_name, customer_email: customer_email, status: "pending")
 
       line_items.each do |line|
+        line = line.symbolize_keys
         product = Product.find_by(sku: line[:sku])
         raise ArgumentError, "Unknown SKU: #{line[:sku]}" unless product
         raise ArgumentError, "Insufficient stock for #{product.sku}" if product.stock_quantity < line[:quantity]

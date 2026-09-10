@@ -1,9 +1,16 @@
 class GetProductTool < ApplicationTool
   description "Get full details for a single product by its ID or SKU."
 
+  annotations(
+    read_only_hint: true,
+    destructive_hint: false,
+    idempotent_hint: true,
+    open_world_hint: false
+  )
+
   arguments do
-    optional(:id).maybe(:integer).description("Product ID")
-    optional(:sku).maybe(:string).description("Product SKU, e.g. 'TOTE-001'")
+    optional(:id).filled(:integer).description("Product ID")
+    optional(:sku).filled(:string).description("Product SKU, e.g. 'TOTE-001'")
   end
 
   def call(id: nil, sku: nil)
