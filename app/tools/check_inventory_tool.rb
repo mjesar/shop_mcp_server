@@ -1,4 +1,5 @@
-class CheckInventoryTool < ApplicationTool
+class CheckInventoryTool < MCP::Tool
+  title "Check Inventory Tool"
   description "Check current stock levels across the catalog, or flag every " \
               "product at or below a low-stock threshold."
 
@@ -9,19 +10,23 @@ class CheckInventoryTool < ApplicationTool
     open_world_hint: false
   )
 
-  arguments do
-    optional(:threshold).filled(:integer).description(
-      "Stock level at or below which a product is considered low (default 5)"
-    )
-  end
+  input_schema(
+    properties: {
+      threshold: { type: "integer", description: "Stock level at or below which a product is considered low (default 5)" }
+    },
+  )
 
-  def call(threshold: 5)
-    low_stock = Product.low_stock(threshold).order(:stock_quantity)
+  class << self
+    def call(threshold: 5, server_context:)
+      low_stock = Product.low_stock(threshold).order(:stock_quantity)
 
-    {
-      threshold: threshold,
-      low_stock_count: low_stock.count,
-      low_stock_products: low_stock.map { |p| { id: p.id, title: p.title, sku: p.sku, stock_quantity: p.stock_quantity } }
-    }
+     results = {
+        threshold: threshold,
+        low_stock_count: low_stock.count,
+        low_stock_products: low_stock.map { |p| { id: p.id, title: p.title, sku: p.sku, stock_quantity: p.stock_quantity } }
+      }
+
+      MCP::Tool::Response.new([ { type: "text", text: JSON.generate(results) } ])
+    end
   end
 end
