@@ -5,7 +5,7 @@ server = MCP::Server.new(
   title: "Shop MCP Server",
   version: "1.0.0",
   tools: [ GetProductTool, ListProductsTool, CheckInventoryTool, ListOrdersTool, GetOrderTool, CreateOrderTool ],
-  resources: [],
+  resources: [ ProductCatalogResource, LowStockResource ],
 )
 
 transport = MCP::Server::Transports::StreamableHTTPTransport.new(server)
