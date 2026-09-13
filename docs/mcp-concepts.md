@@ -72,6 +72,35 @@ section once the migration is done.
   `title` is new in this gem, part of a newer MCP spec revision adding
   better human-facing metadata separate from the machine name.
 
+## Session storage: an in-memory limitation across every official SDK
+- `MCP::Server::Transports::StreamableHTTPTransport`'s `@sessions` is a
+  plain, hard-coded in-memory Ruby Hash. No pluggable/external store
+  (Redis, etc.) exists in this gem.
+- The gem's own docs confirm this is a hard constraint, not an oversight:
+  it "must run in a single process" — even multiple Puma *workers* on one
+  machine break it, since forked processes don't share memory. Running
+  multiple instances requires load-balancer **sticky sessions**, and even
+  that doesn't survive a single instance restarting.
+- **This is not Rails- or Ruby-specific.** The official Python SDK
+  (`StreamableHTTPSessionManager`) and TypeScript SDK have the identical
+  design: in-memory-only session state, single-instance assumption. A
+  TypeScript SDK GitHub issue states plainly: "This is a fundamental SDK
+  design limitation affecting ALL MCP TypeScript projects."
+- **The protocol itself is moving away from this.** The newer MCP spec
+  revision (2026-07-28) drops mandatory session state specifically to fix
+  this scaling problem — the emerging "stateless modern lifecycle" is
+  conceptually the same idea as the Rails "controller" pattern we chose
+  against, for learning purposes, in favor of the stateful "mount"
+  pattern. What we picked to learn the fuller architecture is the exact
+  pattern the ecosystem is moving away from, for the exact reason we
+  hit here.
+- Practical consequence for deployment: a production deploy that
+  restarts the server process drops every active MCP session
+  immediately. Clients must re-`initialize`. No code change fixes this
+  within the mount pattern as designed by any current official SDK —
+  the fix is architectural (stateless mode, or accept single-process +
+  sticky sessions).
+
 ## Tool API differences: fast-mcp vs official mcp gem
 | | fast-mcp | official mcp gem |
 |---|---|---|
