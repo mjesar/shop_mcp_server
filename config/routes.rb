@@ -9,7 +9,13 @@ server = MCP::Server.new(
   prompts: [ InventoryCheckPrompt ]
 )
 
-transport = MCP::Server::Transports::StreamableHTTPTransport.new(server)
+ngrok_host = ENV.fetch("NGROK_HOST", nil)
+
+transport = MCP::Server::Transports::StreamableHTTPTransport.new(
+  server,
+  allowed_hosts: [ ngrok_host ].compact,
+  allowed_origins: [ "https://#{ngrok_host}" ].compact,
+)
 
 Rails.application.routes.draw do
   get "up" => "rails/health#show", as: :rails_health_check
