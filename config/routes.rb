@@ -4,7 +4,7 @@ server = MCP::Server.new(
   name: "shop-mcp-server",
   title: "Shop MCP Server",
   version: "1.0.0",
-  tools: [ GetProductTool, ListProductsTool, CheckInventoryTool, ListOrdersTool ],
+  tools: [ GetProductTool, ListProductsTool, CheckInventoryTool, ListOrdersTool, GetOrderTool ],
   resources: [],
 )
 
