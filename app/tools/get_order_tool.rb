@@ -19,7 +19,7 @@ class GetOrderTool < MCP::Tool
   class << self
     def call(id:, server_context:)
       order = Order.find_by(id: id)
-      return MCP::Tool::Response.new([ { type: "text", text: JSON.generate({ error: "Order not found" }) } ]) unless order
+      return MCP::Tool::Response.new([ { type: "text", text: JSON.generate({ error: "Order not found" }) } ], error: true) unless order
 
      results =  {
         id: order.id,

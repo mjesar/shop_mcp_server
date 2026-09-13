@@ -22,8 +22,8 @@ class GetProductTool < MCP::Tool
                   Product.find_by(sku: sku)
       end
 
-      return MCP::Tool::Response.new([ { type: "text", text: JSON.generate({ error: "Provide either id or sku" }) } ]) if id.nil? && sku.nil?
-      return MCP::Tool::Response.new([ { type: "text", text: JSON.generate({ error: "Product not found" }) } ]) unless product
+      return MCP::Tool::Response.new([ { type: "text", text: JSON.generate({ error: "Provide either id or sku" }) } ], error: true) if id.nil? && sku.nil?
+      return MCP::Tool::Response.new([ { type: "text", text: JSON.generate({ error: "Product not found" }) } ], error: true) unless product
 
       result = {
         id: product.id,

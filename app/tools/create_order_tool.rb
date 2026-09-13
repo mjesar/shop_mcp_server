@@ -1,4 +1,5 @@
-class CreateOrderTool < ApplicationTool
+class CreateOrderTool < MCP::Tool
+  title "Create Order Tool"
   description "Create a new order for a customer with one or more line items. " \
               "This writes to the database and decrements product stock — " \
               "confirm the details with the user before calling it."
@@ -9,38 +10,54 @@ class CreateOrderTool < ApplicationTool
     open_world_hint: false
   )
 
-  arguments do
-    required(:customer_name).filled(:string).description("Customer's full name")
-    required(:customer_email).filled(:string).description("Customer's email address")
-    required(:line_items).array(:hash).description("List of { sku, quantity } to order") do
-      required(:sku).filled(:string).description("Product SKU")
-      required(:quantity).filled(:integer).description("Quantity to order")
-    end
-  end
+  input_schema(
+    properties: {
+      customer_name: { type: "string", description: "Customer's full name" },
+      customer_email: { type: "string", description: "Customer's email address" },
+      line_items: {
+        type: "array",
+        description: "List of { sku, quantity } to order",
+        items: {
+          type: "object",
+          properties: {
+            sku: { type: "string", description: "Product SKU" },
+            quantity: { type: "integer", description: "Quantity to order" }
+          },
+          required: [ "sku", "quantity" ]
+        }
+      }
+    },
+    required: [ "customer_name", "customer_email", "line_items" ]
+  )
 
-  def call(customer_name:, customer_email:, line_items:)
-    order = nil
+  class << self
+    def call(customer_name:, customer_email:, line_items:, server_context:)
+      order = nil
 
-    ActiveRecord::Base.transaction do
-      order = Order.create!(customer_name: customer_name, customer_email: customer_email, status: "pending")
+      begin
+        ActiveRecord::Base.transaction do
+          order = Order.create!(customer_name: customer_name, customer_email: customer_email, status: "pending")
 
-      line_items.each do |line|
-        line = line.symbolize_keys
-        product = Product.find_by(sku: line[:sku])
-        raise ArgumentError, "Unknown SKU: #{line[:sku]}" unless product
-        raise ArgumentError, "Insufficient stock for #{product.sku}" if product.stock_quantity < line[:quantity]
+          line_items.each do |line|
+            line = line.symbolize_keys
+            product = Product.find_by(sku: line[:sku])
+            raise ArgumentError, "Unknown SKU: #{line[:sku]}" unless product
+            raise ArgumentError, "Insufficient stock for #{product.sku}" if product.stock_quantity < line[:quantity]
 
-        order.order_items.create!(
-          product: product,
-          quantity: line[:quantity],
-          unit_price_cents: product.price_cents
-        )
-        product.decrement!(:stock_quantity, line[:quantity])
+            order.order_items.create!(
+              product: product,
+              quantity: line[:quantity],
+              unit_price_cents: product.price_cents
+            )
+            product.decrement!(:stock_quantity, line[:quantity])
+          end
+        end
+
+        results = { order_id: order.id, status: order.status, total: order.total }
+        MCP::Tool::Response.new([ { type: "text", text: JSON.generate(results) } ])
+      rescue ActiveRecord::RecordInvalid, ArgumentError => e
+        MCP::Tool::Response.new([ { type: "text", text: JSON.generate({ error: e.message }) } ], error: true)
       end
     end
-
-    { order_id: order.id, status: order.status, total: order.total }
-  rescue ActiveRecord::RecordInvalid, ArgumentError => e
-    { error: e.message }
   end
 end
