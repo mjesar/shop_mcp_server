@@ -6,6 +6,7 @@ server = MCP::Server.new(
   version: "1.0.0",
   tools: [ GetProductTool, ListProductsTool, CheckInventoryTool, ListOrdersTool, GetOrderTool, CreateOrderTool ],
   resources: [ ProductCatalogResource, LowStockResource ],
+  prompts: [ InventoryCheckPrompt ]
 )
 
 transport = MCP::Server::Transports::StreamableHTTPTransport.new(server)
