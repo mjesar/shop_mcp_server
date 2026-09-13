@@ -1,4 +1,5 @@
-class ListProductsTool < ApplicationTool
+class ListProductsTool < MCP::Tool
+  title "List Products Tool"
   description "List products in the store catalog, optionally filtered by " \
               "a title search term and/or stock availability."
 
@@ -9,26 +10,32 @@ class ListProductsTool < ApplicationTool
     open_world_hint: false
   )
 
-  arguments do
-    optional(:search).filled(:string).description("Case-insensitive substring to match against product titles")
-    optional(:in_stock_only).filled(:bool).description("If true, only return products with stock_quantity > 0")
-    optional(:limit).filled(:integer).description("Max number of products to return (default 20)")
-  end
+  input_schema(
+    properties: {
+      search: { type: "string", description: "Case-insensitive substring to match against product titles" },
+      in_stock_only: { type: "boolean", description: "If true, only return products with stock_quantity > 0" },
+      limit: { type: "integer", description: "Max number of products to return (default 20)" }
+    },
+  )
 
-  def call(search: nil, in_stock_only: false, limit: 20)
-    scope = Product.all
-    scope = scope.search_by_title(search) if search.present?
-    scope = scope.in_stock if in_stock_only
-    scope = scope.order(:title).limit(limit)
+  class << self
+    def call(search: nil, in_stock_only: false, limit: 20, server_context:)
+      products = Product.all
+      products = products.search_by_title(search) if search.present?
+      products = products.in_stock if in_stock_only
+      products = products.order(:title).limit(limit)
 
-    scope.map do |product|
-      {
-        id: product.id,
-        title: product.title,
-        sku: product.sku,
-        price: product.price,
-        stock_quantity: product.stock_quantity
-      }
+      results = products.map do |product|
+        {
+          id: product.id,
+          title: product.title,
+          sku: product.sku,
+          price: product.price,
+          stock_quantity: product.stock_quantity
+        }
+      end
+
+      MCP::Tool::Response.new([ { type: "text", text: JSON.generate(results) } ])
     end
   end
 end

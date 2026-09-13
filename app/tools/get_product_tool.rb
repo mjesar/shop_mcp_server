@@ -1,36 +1,41 @@
-class GetProductTool < ApplicationTool
+class GetProductTool < MCP::Tool
+  title "Get Product"
   description "Get full details for a single product by its ID or SKU."
-
+  input_schema(
+    properties: {
+      id: { type: "integer" },
+      sku: { type: "string" }
+    },
+  )
   annotations(
     read_only_hint: true,
     destructive_hint: false,
     idempotent_hint: true,
-    open_world_hint: false
+    open_world_hint: false,
   )
 
-  arguments do
-    optional(:id).filled(:integer).description("Product ID")
-    optional(:sku).filled(:string).description("Product SKU, e.g. 'TOTE-001'")
-  end
+  class << self
+    def call(id: nil, sku: nil, server_context:)
+      product = if id
+                  Product.find_by(id: id)
+      elsif sku
+                  Product.find_by(sku: sku)
+      end
 
-  def call(id: nil, sku: nil)
-    product = if id
-                Product.find_by(id: id)
-    elsif sku
-                Product.find_by(sku: sku)
+      return MCP::Tool::Response.new([ { type: "text", text: JSON.generate({ error: "Provide either id or sku" }) } ], error: true) if id.nil? && sku.nil?
+      return MCP::Tool::Response.new([ { type: "text", text: JSON.generate({ error: "Product not found" }) } ], error: true) unless product
+
+      result = {
+        id: product.id,
+        title: product.title,
+        sku: product.sku,
+        description: product.description,
+        price: product.price,
+        stock_quantity: product.stock_quantity,
+        low_stock: product.low_stock?
+      }
+
+      MCP::Tool::Response.new([ { type: "text", text: JSON.generate(result) } ])
     end
-
-    return { error: "Provide either id or sku" } if id.nil? && sku.nil?
-    return { error: "Product not found" } unless product
-
-    {
-      id: product.id,
-      title: product.title,
-      sku: product.sku,
-      description: product.description,
-      price: product.price,
-      stock_quantity: product.stock_quantity,
-      low_stock: product.low_stock?
-    }
   end
 end

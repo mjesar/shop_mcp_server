@@ -47,4 +47,4 @@ group :development, :test do
   gem "rubocop-rails-omakase", require: false
 end
 
-gem "fast-mcp"
+gem "mcp"
