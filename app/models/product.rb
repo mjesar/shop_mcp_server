@@ -1,6 +1,7 @@
 class Product < ApplicationRecord
   has_many :order_items, dependent: :restrict_with_error
   has_many :orders, through: :order_items
+  has_neighbors :embedding
 
   validates :title, presence: true
   validates :sku, presence: true, uniqueness: true
