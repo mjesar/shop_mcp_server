@@ -27,11 +27,11 @@ class VoyageClient
 
     response = http.request(request)
 
-    if response.is_a?(Net::HTTPSuccess) == false
-      raise Error, "Voyage API error: #{response.code} #{response.body}"
-    else
+    if response.is_a?(Net::HTTPSuccess)
       data = JSON.parse(response.body)["data"]
       data.sort_by { |item| item["index"] }.map { |item| item["embedding"] }
+    else
+      raise Error, "Voyage API error: #{response.code} #{response.body}"
     end
   end
 end
