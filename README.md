@@ -1,8 +1,8 @@
 # Shop MCP Server
 
 A Ruby on Rails app that exposes a small e-commerce store — products,
-orders, inventory — to LLMs like Claude over the **Model Context
-Protocol (MCP)**, using the [official `mcp` Ruby SDK](https://github.com/modelcontextprotocol/ruby-sdk).
+orders, inventory, and semantic search — to LLMs like Claude over the
+**Model Context Protocol (MCP)**, using the [official `mcp` Ruby SDK](https://github.com/modelcontextprotocol/ruby-sdk).
 
 Built as a learning project: to understand how MCP servers actually work,
 end to end, in a Rails app — not just to wire up a tutorial, but to hit
@@ -38,12 +38,18 @@ stock?"*:
    matches the question — nobody hardcoded that decision.
 3. The client calls the tool (`tools/call`) with whatever arguments make
    sense.
-4. This Rails app runs real Ruby code against a real SQLite database and
-   returns real numbers.
+4. This Rails app runs real Ruby code against a real PostgreSQL database
+   and returns real numbers.
 5. The AI turns that real data into a normal sentence back to the user.
 
 Without step 3–4, the AI would just be making up a plausible-sounding
 answer. That's the entire point of everything below.
+
+A newer tool, `semantic_search_products_tool`, extends this further:
+instead of exact-match lookups, it lets the AI find products by
+*meaning* — "something warm for winter" correctly surfaces a scarf and
+beanie even though neither word appears in their descriptions. See
+[Semantic Search (RAG)](#semantic-search-rag) below.
 
 ## Architecture
 
@@ -59,8 +65,13 @@ flowchart LR
         D["Tools\napp/tools/*.rb"]
         E["Resources\napp/resources/*.rb"]
         F["Prompts\napp/prompts/*.rb"]
+        VC["VoyageClient\napp/services/voyage_client.rb"]
         G[(ActiveRecord\nProduct / Order / OrderItem)]
-        H[(SQLite)]
+        H[(PostgreSQL + pgvector)]
+    end
+
+    subgraph External["External"]
+        I[Voyage AI\nEmbeddings API]
     end
 
     A -- "JSON-RPC 2.0 over HTTP\n+ Mcp-Session-Id" --> B
@@ -69,6 +80,8 @@ flowchart LR
     C --> E
     C --> F
     D --> G
+    D --> VC
+    VC -- "HTTPS POST" --> I
     E --> G
     G --> H
 ```
@@ -78,7 +91,9 @@ directly except through plain ActiveRecord calls — a tool's `call` method
 looks exactly like a Rails controller action querying a model. The
 protocol machinery (sessions, JSON-RPC framing, schema shape) is entirely
 the gem's responsibility; this app's own code is just Ruby and
-ActiveRecord underneath it.
+ActiveRecord underneath it. The one exception is `SemanticSearchProductsTool`,
+which also calls out to Voyage AI's embeddings API via a small internal
+HTTP client (`VoyageClient`) before querying Postgres.
 
 ## Data model
 
@@ -94,6 +109,7 @@ erDiagram
         text description
         integer price_cents
         integer stock_quantity
+        vector embedding "512 dims, pgvector"
     }
     ORDER {
         integer id
@@ -126,12 +142,13 @@ actually paid, even if the product's price changes later.
 | `list_orders_tool` | read-only | Recent orders, optionally filtered by status |
 | `get_order_tool` | read-only | Full order detail including line items |
 | `create_order_tool` | **write** | Places a new order and decrements stock — annotated `destructive_hint: true` |
+| `semantic_search_products_tool` | read-only | Finds products by meaning, not exact keywords, using Voyage AI embeddings + pgvector cosine similarity |
 
 Every tool declares [MCP annotations](https://ruby.sdk.modelcontextprotocol.io/server/tools/)
 (`read_only_hint`, `destructive_hint`, `idempotent_hint`, `open_world_hint`).
 A compliant client uses these to decide what's safe to call automatically
 versus what needs the user's OK first — in Claude, this is genuinely
-visible: the five read-only tools are grouped separately from
+visible: the six read-only tools are grouped separately from
 `create_order_tool`, which is flagged for approval.
 
 `create_order_tool` wraps its work in a single `ActiveRecord::Base.transaction`
@@ -139,6 +156,59 @@ visible: the five read-only tools are grouped separately from
 and every stock decrement inside it is rolled back, not just the failing
 line. Verified directly: a mixed valid/invalid order leaves `Order.count`
 and stock levels completely unchanged.
+
+## Semantic Search (RAG)
+
+`semantic_search_products_tool` is a small [retrieval-augmented
+generation](https://en.wikipedia.org/wiki/Retrieval-augmented_generation)
+(RAG) feature layered on top of the same `products` table the other
+tools use — it adds *how data is found*, not new data.
+
+**How it works:**
+
+1. Every product's `title` + `description` is sent to
+   [Voyage AI](https://www.voyageai.com/)'s embeddings API
+   (`voyage-3.5-lite`, 512 dimensions) via `VoyageClient`
+   (`app/services/voyage_client.rb`), a small `Net::HTTP` wrapper with no
+   external HTTP gem dependency.
+2. The resulting vector — 512 numbers representing the text's *meaning*
+   — is stored in a `vector(512)` column on `products`, via the
+   [pgvector](https://github.com/pgvector/pgvector) Postgres extension
+   and the [`neighbor`](https://github.com/ankane/neighbor) gem
+   (`has_neighbors :embedding` on `Product`).
+3. At search time, the query string is embedded the same way, and
+   `Product.nearest_neighbors(:embedding, query_vector, distance: "cosine")`
+   asks Postgres which stored vectors are closest — plain geometry, no
+   AI involved at this step.
+4. The matched products are returned to the calling AI client (e.g.
+   Claude), which reasons about them and writes the actual answer — the
+   "generation" half of RAG. This app only ever does the "retrieval"
+   half; it never generates text itself.
+
+**Backfilling embeddings** for existing products:
+
+```bash
+bin/rails embeddings:backfill
+```
+
+Only embeds products where `embedding` is `nil`, and sends every
+missing product in a **single batched API call** rather than one call
+per product — Voyage's rate limit on the free tier is as low as 3
+requests/minute, so batching isn't an optimization here, it's a
+requirement.
+
+**Setup:** requires a `VOYAGE_API_KEY` in `.env` — see
+[`.env.example`](.env.example). Note that a key generated through
+MongoDB Atlas's "Model API Key" flow authenticates against
+`ai.mongodb.com`, not `api.voyageai.com` — the two are not
+interchangeable; `VoyageClient::ENDPOINT` is set for the Atlas-issued
+key path.
+
+**Why Voyage specifically:** [Anthropic's own docs state Anthropic does
+not offer its own embedding model](https://platform.claude.com/docs/en/build-with-claude/embeddings)
+and recommend Voyage AI as an embeddings partner for Claude-based RAG —
+this project follows that recommendation rather than picking an
+arbitrary provider.
 
 ## Resources
 
@@ -168,19 +238,31 @@ defines. This project uses all three.
 
 ## Setup
 
-Requires Ruby 3.2+ (this project runs on Ruby 4.0.4) and Bundler.
+Requires Ruby 3.2+ (this project runs on Ruby 4.0.4), Bundler, and
+**PostgreSQL 13+ with the [pgvector](https://github.com/pgvector/pgvector)
+extension installed** (e.g. `postgresql-16-pgvector` on Ubuntu — the
+exact package name depends on which Postgres major version you're
+running).
 
 ```bash
 git clone <this-repo>
 cd shop_mcp_server
 bundle install
-bin/rails db:prepare
+cp .env.example .env   # then fill in VOYAGE_API_KEY
+bin/rails db:create db:migrate
 bin/rails db:seed
+bin/rails embeddings:backfill   # populate embeddings for semantic search
 bin/rails server
 ```
 
 The MCP server is live at `http://localhost:3000/mcp` — a single
 endpoint, handling the full JSON-RPC/Streamable HTTP protocol.
+
+> **Note:** this project originally ran on SQLite (Rails 8's default)
+> and migrated to PostgreSQL specifically to support pgvector, which
+> has no SQLite equivalent for this gem stack. If you're adapting this
+> project and don't need semantic search, SQLite works fine for the
+> other six tools alone.
 
 ## Testing it yourself
 
@@ -244,6 +326,11 @@ Two things worth knowing if you try this:
   support regex. A free ngrok tunnel gets a new random subdomain each
   restart, so hardcoding it means updating this line each time; using
   `ENV.fetch("NGROK_HOST", nil)` instead avoids editing code for it.
+  Note that `allowed_hosts` needs a **bare hostname** while
+  `allowed_origins` needs the **full scheme + host** — the two HTTP
+  headers they check (`Host` vs. `Origin`) are shaped differently, so
+  `config/routes.rb` derives one from the other with `URI(...).host`
+  rather than storing both separately.
 - Sessions live in server memory (see [Known limitations](#known-limitations)
   below) — restarting the Rails server while a client is connected kills
   its session; it'll need to reconnect.
@@ -309,6 +396,15 @@ the cost of that.
   "must be present and non-empty" enforcement layered on top — tools
   defend against bad/missing input themselves, the same way they always
   defended against genuine business-logic errors.
+- **Embeddings aren't kept in sync automatically.** Editing a product's
+  title/description doesn't re-embed it — `bin/rails embeddings:backfill`
+  only fills in products where `embedding` is `nil`. A real production
+  version would re-embed on save (e.g. an `after_commit` callback).
+- **Voyage AI's default data-use terms are opt-out, not opt-in.** By
+  default, text sent to Voyage's API may be used to improve their
+  models unless you explicitly opt out in their dashboard — worth
+  checking before sending anything sensitive/proprietary through this
+  pipeline.
 
 ## How it works — deeper notes
 
@@ -328,7 +424,7 @@ docs claim — including:
 ## Possible extensions
 
 Known MCP capabilities not built here, in case you want to take this
-further::
+further:
 
 - **Resource subscriptions** — push updates when data changes, instead of
   polling
@@ -338,6 +434,8 @@ further::
   question
 - **OAuth-based authorization** — the real way a production MCP server
   would authenticate callers
+- **Auto re-embedding** — keep `products.embedding` in sync via an
+  `after_commit` callback instead of a manual rake task
 
 ## License
 
