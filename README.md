@@ -70,7 +70,23 @@ What the server exposes today, counted from [`config/routes.rb`](config/routes.r
 | Prompts | 1 | `inventory_check` |
 | Seeded products | 10 | Merino Wool Scarf, Cotton Knit Beanie, Hiking Backpack 40L |
 
-In my own hand testing, a search for "something warm for winter" surfaced the scarf and the beanie even though neither word appears in their descriptions. That is a hand-run check, not a measured benchmark, and the repo has no specs for semantic search yet (see [Status](#status)).
+### Real runs
+
+These ran on 2026-10-24 against the 10 seed products, with `mcp` 1.8.1 and Voyage `voyage-3.5-lite`. The tool calls went over the real MCP protocol with curl. The distances come from the same search run in the Rails console. Distance is cosine distance: 0 means the same meaning, and bigger means less related.
+
+| Call | Result | What it shows |
+|---|---|---|
+| `list_products_tool`, search `"warm"` | 0 products | Keyword search only matches titles, and no title contains "warm" |
+| `semantic_search_products_tool`, `"something warm for winter"` | Merino Wool Scarf (0.380), Fleece Zip-Up Jacket (0.380), Cotton Knit Beanie (0.458), Insulated Travel Mug (0.495) | Search by meaning finds what keyword search missed |
+| `semantic_search_products_tool`, `"noise cancelling headphones for flights"` | Wireless Noise-Cancelling Headphones (0.244) first | A close match scores far lower than anything else |
+| `semantic_search_products_tool`, `"a gift for someone who loves coffee"`, limit 3 | Insulated Travel Mug (0.348), Stainless Steel French Press (0.361), Merino Wool Scarf (0.438) | The scarf is a weak match that still passes the cutoff |
+| `semantic_search_products_tool`, `"gaming keyboard"`, before the cutoff | Smart LED Desk Lamp (0.535), Portable Bluetooth Speaker (0.571), Cast Iron Camping Skillet (0.602) | The shop sells no keyboard, but search still returned its three "least bad" products |
+| `semantic_search_products_tool`, `"gaming keyboard"`, after the cutoff | 0 products | Results farther than 0.5 are now dropped (see [What keeps it reliable](#what-keeps-it-reliable)) |
+| `create_order_tool`, 1 × `SCF-001` and 99 × `ELC-003` | `isError: true`, "Insufficient stock for ELC-003" | Still 0 orders and scarf stock still 40: the valid first line was rolled back too |
+
+Before the cutoff, "something warm for winter" also returned the Portable Bluetooth Speaker in fifth place, at 0.537. The cutoff removed it.
+
+These are hand runs, not a benchmark. The 0.5 cutoff was chosen from these numbers on a 10-product catalog, so a bigger catalog would need it checked again.
 
 ## How it works
 
