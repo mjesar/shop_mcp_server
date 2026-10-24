@@ -49,7 +49,7 @@ group :development, :test do
   # Testing framework
   gem "rspec-rails", "~> 8.0"
 
-  gem 'dotenv'
+  gem "dotenv"
 end
 
 gem "mcp"
