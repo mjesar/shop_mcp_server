@@ -43,7 +43,7 @@ MCP fixes that by giving the assistant a toolbox. Each tool is one clearly label
 
 This is a learning project, and the most useful thing it taught me is that **the docs and the tutorials are not the source of truth, running code is.** Two real examples:
 
-- I first built this with the community `fast-mcp` gem. Claude's custom connector setup kept failing and reported an authentication problem. It was not one. `fast-mcp` only speaks the older SSE transport, Claude probes with Streamable HTTP, and the probe hit a `GET`-only route and got a 405. I rewrote everything on the official gem. [The full story](#what-keeps-it-reliable) is below.
+- I first built this with the community `fast-mcp` gem. Claude's custom connector setup kept failing and reported an authentication problem. It was not one. `fast-mcp` only speaks the older SSE transport, Claude probes with Streamable HTTP, and the probe hit a `GET`-only route and got a 405. I rewrote everything on the official gem. [The full story](#what-went-wrong-and-how-it-was-fixed) is below.
 - The `mcp` gem's own docs show prompt arguments with string keys. At runtime they arrive as symbols. I found that by adding a debug log line, and a spec now guards against someone "fixing" it back.
 
 ## See it work
@@ -81,7 +81,7 @@ These ran on 2026-10-24 against the 10 seed products, with `mcp` 1.8.1 and Voyag
 | `semantic_search_products_tool`, `"noise cancelling headphones for flights"` | Wireless Noise-Cancelling Headphones (0.244) first | A close match scores far lower than anything else |
 | `semantic_search_products_tool`, `"a gift for someone who loves coffee"`, limit 3 | Insulated Travel Mug (0.348), Stainless Steel French Press (0.361), Merino Wool Scarf (0.438) | The scarf is a weak match that still passes the cutoff |
 | `semantic_search_products_tool`, `"gaming keyboard"`, before the cutoff | Smart LED Desk Lamp (0.535), Portable Bluetooth Speaker (0.571), Cast Iron Camping Skillet (0.602) | The shop sells no keyboard, but search still returned its three "least bad" products |
-| `semantic_search_products_tool`, `"gaming keyboard"`, after the cutoff | 0 products | Results farther than 0.5 are now dropped (see [What keeps it reliable](#what-keeps-it-reliable)) |
+| `semantic_search_products_tool`, `"gaming keyboard"`, after the cutoff | 0 products | Results farther than 0.5 are now dropped ([fix 3](#what-went-wrong-and-how-it-was-fixed)) |
 | `create_order_tool`, 1 × `SCF-001` and 99 × `ELC-003` | `isError: true`, "Insufficient stock for ELC-003" | Still 0 orders and scarf stock still 40: the valid first line was rolled back too |
 
 Before the cutoff, "something warm for winter" also returned the Portable Bluetooth Speaker in fifth place, at 0.537. The cutoff removed it.
@@ -279,16 +279,29 @@ Inside `app/tools/`:
 | `create_order_tool.rb` | The only write tool, in one transaction |
 | `semantic_search_products_tool.rb` | Embeds the query, then runs the pgvector nearest-neighbor search |
 
-## What keeps it reliable
+## What went wrong, and how it was fixed
 
-- **Specs.** RSpec covers all six non-search tools, both resources, the prompt and the models, calling each tool's `call` directly. There is a CI workflow, [`.github/workflows/ci.yml`](.github/workflows/ci.yml), that runs Brakeman, bundler-audit, RuboCop and the specs.
-- **Transactions.** `create_order_tool` rolls back everything if any line fails, and a spec proves the order count and stock levels stay unchanged.
-- **Annotations.** Read-only versus write tools are declared, so clients can ask for approval before anything destructive.
-- **The real protocol, by hand.** I checked behavior with curl and MCP Inspector, not just unit tests, because that is where the bug below showed up.
+Each of these was found by running the server for real, not by the specs.
 
-**One real failure, and its fix.** Connecting Claude to my first version failed, and Claude reported an authentication problem. I spent time on auth before checking the actual traffic. The cause was transport. `fast-mcp` only implements the legacy SSE transport, which uses a long-lived `GET` plus a separate `POST` endpoint. Claude's connector setup assumes Streamable HTTP, a single endpoint, so its `POST` landed on a `GET`-only route and got a 405, which the setup flow misreported as an auth error. `fast-mcp`'s GitHub issues #166 and #168 describe the same limitation. The fix was to move every tool and both resources to the official `mcp` gem, which implements Streamable HTTP natively. Notes on what changed are in [`docs/mcp-concepts.md`](docs/mcp-concepts.md).
+**1. Claude reported an authentication problem that was not one.** Connecting Claude to my first version failed, and Claude said authentication was the problem. I spent time on auth before checking the actual traffic. The cause was transport. `fast-mcp` only implements the legacy SSE transport, which uses a long-lived `GET` plus a separate `POST` endpoint. Claude's connector setup assumes Streamable HTTP, a single endpoint, so its `POST` landed on a `GET`-only route and got a 405, which the setup flow misreported as an auth error. `fast-mcp`'s GitHub issues #166 and #168 describe the same limitation. The fix was to move every tool and both resources to the official `mcp` gem, which implements Streamable HTTP natively. Notes on what changed are in [`docs/mcp-concepts.md`](docs/mcp-concepts.md).
 
 That fix came with a trade-off. The gem offers two Rails patterns. **Mount** (what I use) builds one server at boot with full session lifecycle, but needs `config.enable_reloading = false`, so code changes need a restart. **Controller** builds a stateless server per request and keeps normal Rails reloading. I picked mount on purpose, to learn the fuller session architecture.
+
+**2. Prompt arguments arrive with symbol keys, not the string keys the docs show.** The `mcp` gem's docs read prompt arguments as `args["threshold"]`. At runtime `InventoryCheckPrompt.template` receives `{threshold: "10"}`, so the string key was always `nil` and the threshold silently fell back to 5. A debug log line showed it, and I checked it again on `mcp` 1.8.1. [`spec/prompts/inventory_check_prompt_spec.rb`](spec/prompts/inventory_check_prompt_spec.rb) now fails if someone "fixes" the code back to string keys.
+
+**3. Semantic search answered "gaming keyboard" with a desk lamp.** A nearest-neighbor query always returns the closest *k* products, even when none of them is close. The shop sells no keyboard, so it returned the three "least bad" products: a desk lamp, a speaker and a skillet. Claude would offer those as matches. The [real runs](#real-runs) show the gap: real matches score 0.24 to 0.38, and unrelated products 0.53 and up. [`SemanticSearchProductsTool`](app/tools/semantic_search_products_tool.rb) now drops anything farther than `MAX_DISTANCE = 0.5`, so "gaming keyboard" returns nothing and Claude says the shop does not carry one, as in the demo.
+
+**4. The embeddings backfill crashed on its second run.** Once every product had an embedding, `bin/rails embeddings:backfill` sent Voyage an empty list, and Voyage answered 400 ("Input cannot be an empty string or empty list"). The task now prints "All products already have embeddings." and skips the call ([`lib/tasks/embeddings.rake`](lib/tasks/embeddings.rake)).
+
+**5. CI was red from 2026-09-18 to 2026-10-24.** It broke with the move to PostgreSQL. `config/database.yml` hardcoded port 5434, where my local Postgres 16 ran, and the CI test job never started a Postgres at all. Then an OS upgrade removed Postgres 16, and the app could not boot locally either. The fix was to drop the hardcoded port, so the app uses the default 5432, and to give CI a `pgvector/pgvector:pg18` service. The same run turned up two smaller failures: `bin/brakeman` exits non-zero when brakeman is not the latest version, and bundler-audit flagged `crass` 1.0.7. Updating the gems fixed both.
+
+### What keeps it reliable
+
+- **Specs.** 48 RSpec examples cover all six non-search tools, both resources, the prompt and the models, calling each tool's `call` directly. Semantic search and the backfill task have no specs yet.
+- **CI.** [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs Brakeman, bundler-audit, RuboCop and the specs against Postgres 18 with pgvector, on every pull request and every push to master.
+- **Transactions.** `create_order_tool` rolls back everything if any line fails. A spec proves the order count and stock levels stay unchanged, and the [real runs](#real-runs) show the same thing over the protocol.
+- **Annotations.** Read-only and write tools are declared, so a client can ask for approval before anything destructive. In the demo, Claude waits for approval before `create_order_tool` runs.
+- **The real protocol, by hand.** I check behavior with curl, MCP Inspector and Claude itself, not only unit tests, because that is where every bug above showed up.
 
 ## Learn more
 
