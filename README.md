@@ -17,6 +17,24 @@
 
 It is built on the [official `mcp` Ruby SDK](https://github.com/modelcontextprotocol/ruby-sdk), PostgreSQL with [pgvector](https://github.com/pgvector/pgvector), and [Voyage AI](https://www.voyageai.com/) embeddings.
 
+<p align="center">
+  <img src="assets/readme/demo.gif" alt="Demo of Claude.ai using the Shop MCP Server as a custom connector: asked what the shop has for staying warm in winter, Claude calls the semantic search tool and lists the fleece jacket, merino wool scarf, cotton beanie and insulated mug; asked what is running low, it calls the inventory tool and flags the headphones with 3 left; asked for a gaming keyboard, semantic search returns nothing and Claude says the shop does not carry one; asked to order a scarf, Claude asks for approval before the create order tool runs and confirms order #3 for $35.00" width="800">
+</p>
+
+<details>
+<summary>Text version of the demo</summary>
+
+A real chat in Claude.ai, recorded on 2026-10-24, with this server running locally and connected to Claude as a custom connector through an ngrok tunnel. Waits are sped up.
+
+1. **"What do you have for staying warm in winter?"** Claude calls `semantic_search_products_tool`. It lists the Fleece Zip-Up Jacket ($55), Merino Wool Scarf ($35), Cotton Knit Beanie ($15) and Insulated Travel Mug ($18).
+2. **"Is anything running low on stock?"** Claude calls `check_inventory_tool` with the default threshold of 5. It flags the Wireless Noise-Cancelling Headphones (SKU ELC-003), with 3 left. The seed file gives them 15; I lowered it by hand before recording so the check had something to find.
+3. **"Do you have a gaming keyboard?"** Semantic search returns nothing, and so does a title search. Claude says the shop does not carry one. It also notices on its own that "a similarity cutoff is filtering everything out".
+4. **"Order one Merino Wool Scarf for Ali, ali@example.com"** Claude looks up the SKU with `list_products_tool`, then shows the order details and waits for approval before it runs `create_order_tool`. After approval it confirms order #3, pending, 1 × Merino Wool Scarf (SCF-001), $35.00.
+
+Claude.ai also adds a "Language note" to each answer. That comes from a personal setting in my Claude account, not from this server.
+
+</details>
+
 ## Why this exists
 
 An AI assistant can only talk. It cannot check your database, place an order or know what is really in stock. Left alone, it guesses, and a guess that sounds right is worse than no answer.
@@ -42,10 +60,6 @@ An MCP client (Claude, MCP Inspector or curl) sends JSON-RPC 2.0 messages over H
 Tools (`app/tools/*.rb`) query the database through plain ActiveRecord models (`Product`, `Order`, `OrderItem`), stored in PostgreSQL with the pgvector extension. Resources (`app/resources/*.rb`) read the same models. The semantic search tool also calls `VoyageClient` (`app/services/voyage_client.rb`), which sends an HTTPS POST to the Voyage AI embeddings API before it queries Postgres.
 
 </details>
-
-<!-- Paste the demo video's user-attachments URL on its own line below to embed it (drag the MP4 into GitHub's web editor to get one). -->
-
-<!-- Replace this note with a real transcript of one "something warm for winter" search once I have captured it. -->
 
 What the server exposes today, counted from [`config/routes.rb`](config/routes.rb) and the seed file:
 
