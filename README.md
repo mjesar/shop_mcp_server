@@ -137,9 +137,10 @@ Exact-match search fails when people describe what they want instead of naming i
 1. **Embed the products.** Each product's title and description go to Voyage AI (`voyage-3.5-lite`, 512 dimensions) through [`VoyageClient`](app/services/voyage_client.rb), a small `Net::HTTP` wrapper with no extra HTTP gem.
 2. **Store the vectors.** The 512 numbers go into a `vector(512)` column on `products`, using pgvector and the [`neighbor`](https://github.com/ankane/neighbor) gem (`has_neighbors :embedding`).
 3. **Embed the query the same way**, then ask Postgres for the closest stored vectors with `Product.nearest_neighbors(:embedding, query_vector, distance: "cosine")`. This step is plain geometry, with no AI involved.
-4. **Return the matches** to the calling client, which writes the answer. This app only does the "retrieval" half of RAG and never generates text itself.
+4. **Drop the weak matches.** Nearest-neighbor search always returns the closest products, even when none is close, so the tool drops anything with a cosine distance above `MAX_DISTANCE = 0.5`. For "gaming keyboard" in a shop with no keyboards, that leaves an empty list instead of a desk lamp ([fix 3](#what-went-wrong-and-how-it-was-fixed)).
+5. **Return the matches** to the calling client, which writes the answer. This app only does the "retrieval" half of RAG and never generates text itself.
 
-Backfill embeddings for existing products with `bin/rails embeddings:backfill`. It only embeds products where `embedding` is `nil`, and it sends them all in **one batched API call**. Voyage's free tier can be as low as 3 requests per minute, so batching is a requirement, not an optimization.
+Backfill embeddings for existing products with `bin/rails embeddings:backfill`. It only embeds products where `embedding` is `nil`, and it sends them all in **one batched API call**. Voyage's free tier can be as low as 3 requests per minute, so batching is a requirement, not an optimization. Running it again when nothing is missing prints "All products already have embeddings." and makes no API call.
 
 I use Voyage because [Anthropic's docs say Anthropic offers no embedding model of its own](https://platform.claude.com/docs/en/build-with-claude/embeddings) and recommend Voyage AI as the partner for Claude-based RAG.
 
@@ -185,22 +186,39 @@ Text version: a `Product` (id, title, sku, description, price_cents, stock_quant
 
 ## Quick start
 
-You need Ruby (this project runs on 4.0.4), Bundler, and PostgreSQL with the pgvector extension installed (on Ubuntu the package is named like `postgresql-16-pgvector`, matching your Postgres version).
+You need Ruby (this project runs on 4.0.4), Bundler, and PostgreSQL 17 or newer with the pgvector extension (this project runs on PostgreSQL 18; on Ubuntu the package is `postgresql-18-pgvector`). `db/structure.sql` is dumped by PostgreSQL 18 and sets `transaction_timeout`, which PostgreSQL 16 does not know.
+
+**Run the tests.** They need PostgreSQL but no API key, because no spec calls Voyage.
 
 ```bash
 git clone https://github.com/mjesar/shop_mcp_server.git
 cd shop_mcp_server
 bundle install
+bin/rails db:test:prepare
+bundle exec rspec
+```
+
+This is the real output on my machine:
+
+```
+Finished in 0.7673 seconds (files took 1.63 seconds to load)
+48 examples, 0 failures
+```
+
+**Run the server.** Semantic search needs a Voyage API key.
+
+```bash
 cp .env.example .env            # then fill in VOYAGE_API_KEY
 bin/rails db:create db:migrate db:seed
 bin/rails embeddings:backfill   # needed for semantic search only
 bin/rails server
 ```
 
-The seed step prints:
+The seed and backfill steps print:
 
 ```
 Seeded 10 products.
+Embedded 10 products.
 ```
 
 The MCP server is now live at `http://localhost:3000/mcp`. Check it by hand with the real protocol (Streamable HTTP is session-based, so there are three steps):
@@ -332,7 +350,7 @@ No. The gem keeps session state in a plain in-memory Ruby `Hash`, so it must run
 
 ## Setup
 
-Requires Ruby (this project runs on 4.0.4), Bundler, and PostgreSQL with the pgvector extension.
+Requires Ruby (this project runs on 4.0.4), Bundler, and PostgreSQL 17 or newer with the pgvector extension. The app uses the default PostgreSQL connection settings (port 5432), and the usual `PGHOST`, `PGPORT`, `PGUSER` and `PGPASSWORD` variables override them, which is how CI connects.
 
 - `VOYAGE_API_KEY`: needed for embeddings and semantic search. See [`.env.example`](.env.example). A key created through MongoDB Atlas's "Model API Key" flow authenticates against `ai.mongodb.com`, not `api.voyageai.com`, and `VoyageClient::ENDPOINT` is set for that Atlas-issued path.
 - `NGROK_HOST`: optional, the full tunnel URL (for example `https://abc.ngrok-free.app`) when connecting Claude through a tunnel. The gem's DNS-rebinding protection (`allowed_hosts`, `allowed_origins`) matches **exact strings**, not regular expressions. `allowed_hosts` needs a bare hostname and `allowed_origins` needs scheme plus host, so [`config/routes.rb`](config/routes.rb) derives one from the other.
@@ -341,9 +359,9 @@ The project began on SQLite and moved to PostgreSQL because pgvector has no SQLi
 
 ## Tech stack
 
-- Ruby 4.0.4 and Rails 8.1.3.1
-- [`mcp`](https://github.com/modelcontextprotocol/ruby-sdk) 1.5.1, the official Ruby SDK
-- PostgreSQL with pgvector, via the [`neighbor`](https://github.com/ankane/neighbor) gem 1.2.0
+- Ruby 4.0.4 and Rails 8.1.4
+- [`mcp`](https://github.com/modelcontextprotocol/ruby-sdk) 1.8.1, the official Ruby SDK
+- PostgreSQL 18 with pgvector, via the [`neighbor`](https://github.com/ankane/neighbor) gem 1.2.0
 - [Voyage AI](https://www.voyageai.com/) `voyage-3.5-lite`, 512-dimension embeddings
 - RSpec (`rspec-rails` 8.0.4)
 
@@ -354,10 +372,11 @@ A working learning project, not production software. It is not a full store back
 Known limitations:
 
 - **Sessions are in memory and single-process.** `StreamableHTTPTransport` stores sessions in a plain Hash with no pluggable store, so even multiple Puma workers break it, and a restart drops every session. The official Python and TypeScript SDKs share this design, and the newest MCP spec revision (2026-07-28) moves toward a stateless model to fix it.
-- **No authentication.** Every caller is treated the same. Fine locally, not for a real deployment.
+- **No authentication.** Every caller is treated the same. Fine locally, not for a real deployment. While the server runs behind an ngrok tunnel, anyone with the URL can call every tool, including `create_order_tool`. `mcp` 1.8.0 added OAuth 2.1 resource server support to `StreamableHTTPTransport`, so that is the natural next step.
 - **No live push.** `resources/subscribe` is not wired up, so a client re-reads a resource to see fresh data.
 - **Type-only schema validation.** `input_schema` is plain JSON Schema, so tools guard against missing or bad input themselves.
-- **Semantic search has no specs.** It has only been checked by hand.
+- **Semantic search and the backfill task have no specs.** Both have only been checked by hand, in the [real runs](#real-runs) and the demo.
+- **The 0.5 cutoff is tuned on 10 products.** A bigger or different catalog would need the distances checked again.
 - **Embeddings are not kept in sync.** Editing a product does not re-embed it, because the backfill task only fills rows where `embedding` is `nil`. A production version would re-embed in an `after_commit` callback.
 - **Voyage's default data-use terms are opt-out.** Text sent to the API may be used to improve their models unless you opt out in their dashboard. Check this before sending anything sensitive.
 
@@ -367,8 +386,8 @@ The code is released under the [MIT License](LICENSE).
 
 ## Related work
 
-This is one of three connected projects on agentic commerce:
+Related projects:
 
 - [`product_geo_agent`](https://github.com/mjesar/product_geo_agent): a Rails CLI agent that scores how discoverable a Shopify product is to AI assistants (agents and tool calling).
 - [`ai_shop_assistant`](https://github.com/mjesar/ai_shop_assistant): a shopping chat assistant that calls Shopify's live Catalog API over MCP (the client side of what this repo serves).
-- [`ucp_catalog`](https://github.com/mjesar/ucp_catalog): a Ruby gem in development for talking to Universal Commerce Protocol catalog APIs.
+- [`support_engineer`](https://github.com/mjesar/support_engineer): a Rails 8 AI support agent that investigates orders and shipments, searches company policies and asks a human before it acts. A learning project in progress.
