@@ -11,6 +11,7 @@
   <img src="https://img.shields.io/badge/PostgreSQL-pgvector-4169E1?logo=postgresql&logoColor=white" alt="PostgreSQL with pgvector">
   <img src="https://img.shields.io/badge/Protocol-MCP-2e7d4f" alt="Model Context Protocol">
   <img src="https://img.shields.io/badge/Embeddings-Voyage%20AI-c41e4a" alt="Voyage AI embeddings">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue" alt="MIT License"></a>
 </p>
 
 **Shop MCP Server is a Ruby on Rails MCP (Model Context Protocol) server that lets an AI assistant such as Claude read a small store's products, orders and inventory, place orders, and search products by meaning.** It is for Rails developers who want to see how an MCP server and a small RAG (retrieval-augmented generation) feature work in a real app.
@@ -361,6 +362,8 @@ Known limitations:
 - **Voyage's default data-use terms are opt-out.** Text sent to the API may be used to improve their models unless you opt out in their dashboard. Check this before sending anything sensitive.
 
 Not built here, in case you want to extend it: resource subscriptions, sampling, elicitation, OAuth-based authorization, and automatic re-embedding.
+
+The code is released under the [MIT License](LICENSE).
 
 ## Related work
 
