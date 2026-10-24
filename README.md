@@ -2,7 +2,7 @@
   <img src="assets/readme/hero.svg" alt="Shop MCP Server: a Ruby on Rails MCP server with semantic search (RAG) on pgvector" width="100%">
 </h1>
 
-<p align="center"><strong>Learn how to build an MCP server in Ruby on Rails that gives an AI assistant real access to a store.</strong></p>
+<p align="center"><strong>Learn how to build an MCP server in Ruby on Rails that connects your app to AI assistants like Claude.</strong></p>
 
 <p align="center">
   <a href="https://github.com/mjesar/shop_mcp_server/actions/workflows/ci.yml"><img src="https://github.com/mjesar/shop_mcp_server/actions/workflows/ci.yml/badge.svg?branch=master" alt="CI status"></a>
@@ -14,7 +14,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue" alt="MIT License"></a>
 </p>
 
-**Shop MCP Server is a Ruby on Rails MCP (Model Context Protocol) server that lets an AI assistant such as Claude read a small store's products, orders and inventory, place orders, and search products by meaning.** It is for Rails developers who want to see how an MCP server and a small RAG (retrieval-augmented generation) feature work in a real app.
+**Shop MCP Server is a Ruby on Rails MCP (Model Context Protocol) server that connects a Rails app to AI assistants such as Claude.** The example app is a small store: the assistant can read its products, orders and inventory, place orders, and search products by meaning. It is for Rails developers who want to see how an MCP server and a small RAG (retrieval-augmented generation) feature work in a real app.
 
 It is built on the [official `mcp` Ruby SDK](https://github.com/modelcontextprotocol/ruby-sdk), PostgreSQL with [pgvector](https://github.com/pgvector/pgvector), and [Voyage AI](https://www.voyageai.com/) embeddings.
 
@@ -42,10 +42,10 @@ An AI assistant can only talk. It cannot check your database, place an order or 
 
 MCP fixes that by giving the assistant a toolbox. Each tool is one clearly labeled capability, and the assistant reads the labels and decides on its own when to use one. Nobody hardcodes "when the user asks about stock, call this."
 
-This is a learning project, and the most useful thing it taught me is that **the docs and the tutorials are not the source of truth, running code is.** Two real examples:
+This is a learning project, and the most useful thing it taught me is that **the docs and the tutorials are not the source of truth, running code is.** Two examples:
 
-- I first built this with the community `fast-mcp` gem. Claude's custom connector setup kept failing and reported an authentication problem. It was not one. `fast-mcp` only speaks the older SSE transport, Claude probes with Streamable HTTP, and the probe hit a `GET`-only route and got a 405. I rewrote everything on the official gem. [The full story](#what-went-wrong-and-how-it-was-fixed) is below.
-- The `mcp` gem's own docs show prompt arguments with string keys. At runtime they arrive as symbols. I found that by adding a debug log line, and a spec now guards against someone "fixing" it back.
+- Claude reported an authentication problem with my first version. The real cause was the transport, and I rewrote the server on the official gem ([fix 1](#what-went-wrong-and-how-it-was-fixed)).
+- The `mcp` gem's docs show prompt arguments with string keys. At runtime they arrive as symbols ([fix 2](#what-went-wrong-and-how-it-was-fixed)).
 
 ## See it work
 
@@ -87,102 +87,7 @@ These ran on 2026-10-24 against the 10 seed products, with `mcp` 1.8.1 and Voyag
 
 Before the cutoff, "something warm for winter" also returned the Portable Bluetooth Speaker in fifth place, at 0.537. The cutoff removed it.
 
-These are hand runs, not a benchmark. The 0.5 cutoff was chosen from these numbers on a 10-product catalog, so a bigger catalog would need it checked again.
-
-## How it works
-
-A normal chat reply is `Question → Answer`. With MCP it becomes `Question → pick a tool → real data → Answer`. When someone asks an assistant *"what's running low on stock?"*:
-
-1. **The client lists the tools.** It sends `tools/list` and the server returns every tool with its description. The registry is the `tools:` array in [`config/routes.rb`](config/routes.rb).
-2. **The AI picks one.** It reads the descriptions and decides [`CheckInventoryTool`](app/tools/check_inventory_tool.rb) matches. The tool's own description says it flags "every product at or below a low-stock threshold."
-3. **The client calls it.** It sends `tools/call` with arguments, for example `threshold: 5`. The default threshold is 5.
-4. **Rails runs real code.** The tool's `call` method is plain ActiveRecord against PostgreSQL, much like a controller action.
-5. **The AI writes the answer** from the real numbers instead of guessing.
-
-The protocol work (sessions, JSON-RPC framing, schemas) belongs to the gem. The app's own code is ordinary Ruby underneath it.
-
-### Tools
-
-| Tool | Type | What it does |
-|---|---|---|
-| `get_product_tool` | read-only | Full detail for one product, by ID or SKU |
-| `list_products_tool` | read-only | Search or browse the catalog, optionally in-stock only |
-| `check_inventory_tool` | read-only | Flags every product at or below a stock threshold (default 5) |
-| `list_orders_tool` | read-only | Recent orders, optionally filtered by status |
-| `get_order_tool` | read-only | Full order detail including line items |
-| `create_order_tool` | **write** | Places an order and decrements stock, annotated `destructive_hint: true` |
-| `semantic_search_products_tool` | read-only | Finds products by meaning using Voyage embeddings and pgvector cosine similarity |
-
-Every tool declares [MCP annotations](https://ruby.sdk.modelcontextprotocol.io/server/tools/) (`read_only_hint`, `destructive_hint`, `idempotent_hint`, `open_world_hint`). A compliant client uses them to decide what is safe to run automatically and what needs the user's OK. In Claude the six read-only tools are grouped apart from `create_order_tool`, which is flagged for approval.
-
-`create_order_tool` wraps its work in one `ActiveRecord::Base.transaction`. If any line item fails (unknown SKU, not enough stock), the whole order and every stock decrement is rolled back. [`spec/tools/create_order_tool_spec.rb`](spec/tools/create_order_tool_spec.rb) covers this.
-
-### Resources and prompts
-
-| Resource | URI | Content |
-|---|---|---|
-| Product Catalog | `shop://products/catalog` | Full catalog as JSON |
-| Low Stock Products | `shop://products/low-stock` | Products at or below 5 units |
-
-| Prompt | Argument | What it does |
-|---|---|---|
-| `inventory_check` | `threshold` (optional) | Hands the client a ready-made question: what is at or below N units, and what should I reorder? |
-
-A resource is data a client reads directly, like opening a file. A prompt is a saved template that phrases a good question, which the client's model then answers, likely by calling `check_inventory_tool`. Tools, resources and prompts are the three building blocks MCP defines, and this project uses all three.
-
-### Semantic search (RAG)
-
-Exact-match search fails when people describe what they want instead of naming it. `semantic_search_products_tool` finds products by meaning:
-
-1. **Embed the products.** Each product's title and description go to Voyage AI (`voyage-3.5-lite`, 512 dimensions) through [`VoyageClient`](app/services/voyage_client.rb), a small `Net::HTTP` wrapper with no extra HTTP gem.
-2. **Store the vectors.** The 512 numbers go into a `vector(512)` column on `products`, using pgvector and the [`neighbor`](https://github.com/ankane/neighbor) gem (`has_neighbors :embedding`).
-3. **Embed the query the same way**, then ask Postgres for the closest stored vectors with `Product.nearest_neighbors(:embedding, query_vector, distance: "cosine")`. This step is plain geometry, with no AI involved.
-4. **Drop the weak matches.** Nearest-neighbor search always returns the closest products, even when none is close, so the tool drops anything with a cosine distance above `MAX_DISTANCE = 0.5`. For "gaming keyboard" in a shop with no keyboards, that leaves an empty list instead of a desk lamp ([fix 3](#what-went-wrong-and-how-it-was-fixed)).
-5. **Return the matches** to the calling client, which writes the answer. This app only does the "retrieval" half of RAG and never generates text itself.
-
-Backfill embeddings for existing products with `bin/rails embeddings:backfill`. It only embeds products where `embedding` is `nil`, and it sends them all in **one batched API call**. Voyage's free tier can be as low as 3 requests per minute, so batching is a requirement, not an optimization. Running it again when nothing is missing prints "All products already have embeddings." and makes no API call.
-
-I use Voyage because [Anthropic's docs say Anthropic offers no embedding model of its own](https://platform.claude.com/docs/en/build-with-claude/embeddings) and recommend Voyage AI as the partner for Claude-based RAG.
-
-### Data model
-
-Money is stored as integer cents (`price_cents`, `unit_price_cents`) to avoid floating-point rounding. `unit_price_cents` is copied onto `OrderItem` at order time, so an order keeps showing what the customer actually paid even if the product price changes later.
-
-<details>
-<summary>Entity diagram (text version below)</summary>
-
-```mermaid
-erDiagram
-    PRODUCT ||--o{ ORDER_ITEM : "ordered in"
-    ORDER ||--o{ ORDER_ITEM : contains
-
-    PRODUCT {
-        integer id
-        string title
-        string sku
-        text description
-        integer price_cents
-        integer stock_quantity
-        vector embedding "512 dims, pgvector"
-    }
-    ORDER {
-        integer id
-        string customer_name
-        string customer_email
-        string status
-    }
-    ORDER_ITEM {
-        integer id
-        integer order_id
-        integer product_id
-        integer quantity
-        integer unit_price_cents
-    }
-```
-
-Text version: a `Product` (id, title, sku, description, price_cents, stock_quantity, a 512-dimension embedding) can appear in many `OrderItem` rows. An `Order` (id, customer_name, customer_email, status) has many `OrderItem` rows. An `OrderItem` (id, order_id, product_id, quantity, unit_price_cents) links one order to one product.
-
-</details>
+These are hand runs, not a benchmark. The 0.5 cutoff comes from these numbers, on 10 products (see [Status](#status)).
 
 ## Quick start
 
@@ -249,6 +154,101 @@ Other ways to try it:
 - **MCP Inspector**: run `npx @modelcontextprotocol/inspector`, add a server with transport **Streamable HTTP** and URL `http://localhost:3000/mcp`.
 - **Claude as a real client**: Claude connects from Anthropic's cloud, so `localhost` will not work. Expose the server first (for example `ngrok http 3000`), set `NGROK_HOST` in `.env`, then add a custom connector pointing at `https://<your-tunnel-url>/mcp`.
 
+## How it works
+
+A normal chat reply is `Question → Answer`. With MCP it becomes `Question → pick a tool → real data → Answer`. When someone asks an assistant *"what's running low on stock?"*:
+
+1. **The client lists the tools.** It sends `tools/list` and the server returns every tool with its description. The registry is the `tools:` array in [`config/routes.rb`](config/routes.rb).
+2. **The AI picks one.** It reads the descriptions and decides [`CheckInventoryTool`](app/tools/check_inventory_tool.rb) matches. The tool's own description says it flags "every product at or below a low-stock threshold."
+3. **The client calls it.** It sends `tools/call` with arguments, for example `threshold: 10`. Without one, the threshold is 5.
+4. **Rails runs real code.** The tool's `call` method is plain ActiveRecord against PostgreSQL, much like a controller action.
+5. **The AI writes the answer** from the real numbers instead of guessing.
+
+The protocol work (sessions, JSON-RPC framing, schemas) belongs to the gem. The app's own code is ordinary Ruby underneath it.
+
+### Tools
+
+| Tool | Type | What it does |
+|---|---|---|
+| `get_product_tool` | read-only | Full detail for one product, by ID or SKU |
+| `list_products_tool` | read-only | Search or browse the catalog, optionally in-stock only |
+| `check_inventory_tool` | read-only | Flags every product at or below a stock threshold (default 5) |
+| `list_orders_tool` | read-only | Recent orders, optionally filtered by status |
+| `get_order_tool` | read-only | Full order detail including line items |
+| `create_order_tool` | **write** | Places an order and decrements stock, annotated `destructive_hint: true` |
+| `semantic_search_products_tool` | read-only | Finds products by meaning using Voyage embeddings and pgvector cosine similarity |
+
+Every tool declares [MCP annotations](https://ruby.sdk.modelcontextprotocol.io/server/tools/) (`read_only_hint`, `destructive_hint`, `idempotent_hint`, `open_world_hint`). A client uses them to decide what can run on its own and what needs the user's OK. In the demo, Claude shows the order details and waits for approval before `create_order_tool` runs. It also asked before `list_products_tool`, so how often Claude asks depends on the connector's permission settings too.
+
+`create_order_tool` wraps its work in one `ActiveRecord::Base.transaction`. If any line item fails (unknown SKU, not enough stock), the whole order and every stock decrement is rolled back. [`spec/tools/create_order_tool_spec.rb`](spec/tools/create_order_tool_spec.rb) covers this.
+
+### Resources and prompts
+
+| Resource | URI | Content |
+|---|---|---|
+| Product Catalog | `shop://products/catalog` | Full catalog as JSON |
+| Low Stock Products | `shop://products/low-stock` | Products at or below 5 units |
+
+| Prompt | Argument | What it does |
+|---|---|---|
+| `inventory_check` | `threshold` (optional) | Hands the client a ready-made question: what is at or below N units, and what should I reorder? |
+
+A resource is data a client reads directly, like opening a file. A prompt is a saved template that phrases a good question. The client's model then answers it, most likely by calling `check_inventory_tool`. Tools, resources and prompts are the three building blocks MCP defines, and this project uses all three.
+
+### Semantic search (RAG)
+
+Exact-match search fails when people describe what they want instead of naming it. `semantic_search_products_tool` finds products by meaning:
+
+1. **Embed the products.** Each product's title and description go to Voyage AI (`voyage-3.5-lite`, 512 dimensions) through [`VoyageClient`](app/services/voyage_client.rb), a small `Net::HTTP` wrapper with no extra HTTP gem.
+2. **Store the vectors.** The 512 numbers go into a `vector(512)` column on `products`, using pgvector and the [`neighbor`](https://github.com/ankane/neighbor) gem (`has_neighbors :embedding`).
+3. **Embed the query the same way**, then ask Postgres for the closest stored vectors with `Product.nearest_neighbors(:embedding, query_vector, distance: "cosine")`. This step is plain geometry, with no AI involved.
+4. **Drop the weak matches.** Nearest-neighbor search always returns the closest products, even when none is close, so the tool drops anything with a cosine distance above `MAX_DISTANCE = 0.5`. For "gaming keyboard" in a shop with no keyboards, that leaves an empty list instead of a desk lamp ([fix 3](#what-went-wrong-and-how-it-was-fixed)).
+5. **Return the matches** to the calling client, which writes the answer. This app only does the "retrieval" half of RAG and never generates text itself.
+
+Backfill embeddings for existing products with `bin/rails embeddings:backfill`. It only embeds products where `embedding` is `nil`, and it sends them all in **one batched API call**. Voyage's free tier can be as low as 3 requests per minute, so the task has to batch. Running it again when nothing is missing prints "All products already have embeddings." and makes no API call.
+
+I use Voyage because [Anthropic's docs say Anthropic offers no embedding model of its own](https://platform.claude.com/docs/en/build-with-claude/embeddings) and recommend Voyage AI as the partner for Claude-based RAG.
+
+### Data model
+
+Money is stored as integer cents (`price_cents`, `unit_price_cents`) to avoid floating-point rounding. `unit_price_cents` is copied onto `OrderItem` at order time, so an order keeps showing what the customer actually paid even if the product price changes later.
+
+<details>
+<summary>Entity diagram (text version below)</summary>
+
+```mermaid
+erDiagram
+    PRODUCT ||--o{ ORDER_ITEM : "ordered in"
+    ORDER ||--o{ ORDER_ITEM : contains
+
+    PRODUCT {
+        integer id
+        string title
+        string sku
+        text description
+        integer price_cents
+        integer stock_quantity
+        vector embedding "512 dims, pgvector"
+    }
+    ORDER {
+        integer id
+        string customer_name
+        string customer_email
+        string status
+    }
+    ORDER_ITEM {
+        integer id
+        integer order_id
+        integer product_id
+        integer quantity
+        integer unit_price_cents
+    }
+```
+
+Text version: a `Product` (id, title, sku, description, price_cents, stock_quantity, a 512-dimension embedding) can appear in many `OrderItem` rows. An `Order` (id, customer_name, customer_email, status) has many `OrderItem` rows. An `OrderItem` (id, order_id, product_id, quantity, unit_price_cents) links one order to one product.
+
+</details>
+
 ## Key terms
 
 - **MCP (Model Context Protocol)**: an open protocol that lets an AI client discover and call tools, read resources and use prompts on a server, so the model can work with real data instead of guessing.
@@ -264,7 +264,7 @@ Other ways to try it:
 
 ## Project structure
 
-Most of the code is plain Ruby classes under `app/`. It is a Rails app mainly for autoloading, ActiveRecord, config and the test setup. The generated web and job folders (`app/controllers`, `app/views`, `app/jobs`, `app/mailers`, and `.kamal/`, `Dockerfile`) are framework boilerplate you can ignore.
+Most of the code is plain Ruby classes under `app/`. It is a Rails app mainly for autoloading, ActiveRecord, config and the test setup. You can ignore the generated `app/controllers`, `app/views`, `app/jobs` and `app/mailers` folders, plus `.kamal/` and the `Dockerfile`: they are Rails boilerplate.
 
 ```
 shop_mcp_server/
@@ -284,7 +284,8 @@ shop_mcp_server/
 ├── lib/tasks/embeddings.rake        <-- bin/rails embeddings:backfill
 ├── spec/                            <-- RSpec: tools, resources, prompt, models
 ├── docs/mcp-concepts.md             <-- notes on what I verified while building
-└── assets/readme/hero.svg           <-- the banner at the top of this README
+├── assets/readme/                   <-- the hero, the architecture diagram and the demo GIF
+└── LICENSE                          <-- MIT
 ```
 
 Inside `app/tools/`:
@@ -302,7 +303,7 @@ Inside `app/tools/`:
 
 Each of these was found by running the server for real, not by the specs.
 
-**1. Claude reported an authentication problem that was not one.** Connecting Claude to my first version failed, and Claude said authentication was the problem. I spent time on auth before checking the actual traffic. The cause was transport. `fast-mcp` only implements the legacy SSE transport, which uses a long-lived `GET` plus a separate `POST` endpoint. Claude's connector setup assumes Streamable HTTP, a single endpoint, so its `POST` landed on a `GET`-only route and got a 405, which the setup flow misreported as an auth error. `fast-mcp`'s GitHub issues #166 and #168 describe the same limitation. The fix was to move every tool and both resources to the official `mcp` gem, which implements Streamable HTTP natively. Notes on what changed are in [`docs/mcp-concepts.md`](docs/mcp-concepts.md).
+**1. Claude reported an authentication problem that was not one.** Connecting Claude to my first version failed, and Claude said authentication was the problem. I spent time on auth before checking the actual traffic. The cause was transport. `fast-mcp` only implements the legacy SSE transport, which uses a long-lived `GET` plus a separate `POST` endpoint. Claude's connector setup assumes Streamable HTTP, a single endpoint. So its `POST` landed on a `GET`-only route and got a 405, and the setup flow reported that as an auth error. `fast-mcp`'s GitHub issues #166 and #168 describe the same limitation. The fix was to move every tool and both resources to the official `mcp` gem, which implements Streamable HTTP natively. Notes on what changed are in [`docs/mcp-concepts.md`](docs/mcp-concepts.md).
 
 That fix came with a trade-off. The gem offers two Rails patterns. **Mount** (what I use) builds one server at boot with full session lifecycle, but needs `config.enable_reloading = false`, so code changes need a restart. **Controller** builds a stateless server per request and keeps normal Rails reloading. I picked mount on purpose, to learn the fuller session architecture.
 
@@ -312,7 +313,7 @@ That fix came with a trade-off. The gem offers two Rails patterns. **Mount** (wh
 
 **4. The embeddings backfill crashed on its second run.** Once every product had an embedding, `bin/rails embeddings:backfill` sent Voyage an empty list, and Voyage answered 400 ("Input cannot be an empty string or empty list"). The task now prints "All products already have embeddings." and skips the call ([`lib/tasks/embeddings.rake`](lib/tasks/embeddings.rake)).
 
-**5. CI was red from 2026-09-18 to 2026-10-24.** It broke with the move to PostgreSQL. `config/database.yml` hardcoded port 5434, where my local Postgres 16 ran, and the CI test job never started a Postgres at all. Then an OS upgrade removed Postgres 16, and the app could not boot locally either. The fix was to drop the hardcoded port, so the app uses the default 5432, and to give CI a `pgvector/pgvector:pg18` service. The same run turned up two smaller failures: `bin/brakeman` exits non-zero when brakeman is not the latest version, and bundler-audit flagged `crass` 1.0.7. Updating the gems fixed both.
+**5. CI was red from 2026-09-18 to 2026-10-24.** It broke with the move to PostgreSQL. `config/database.yml` hardcoded port 5434, where my local Postgres 16 ran, and the CI test job never started a Postgres at all. Then an OS upgrade removed Postgres 16, and the app could not boot locally either. The fix: drop the hardcoded port, so the app uses the default 5432, and give CI a `pgvector/pgvector:pg18` service. The same run turned up two smaller failures: `bin/brakeman` exits non-zero when brakeman is not the latest version, and bundler-audit flagged `crass` 1.0.7. Updating the gems fixed both.
 
 ### What keeps it reliable
 
@@ -350,7 +351,7 @@ No. The gem keeps session state in a plain in-memory Ruby `Hash`, so it must run
 
 ## Setup
 
-Requires Ruby (this project runs on 4.0.4), Bundler, and PostgreSQL 17 or newer with the pgvector extension. The app uses the default PostgreSQL connection settings (port 5432), and the usual `PGHOST`, `PGPORT`, `PGUSER` and `PGPASSWORD` variables override them, which is how CI connects.
+The requirements are in [Quick start](#quick-start). The app uses PostgreSQL's default connection settings (port 5432). The usual `PGHOST`, `PGPORT`, `PGUSER` and `PGPASSWORD` variables override them, which is how CI connects.
 
 - `VOYAGE_API_KEY`: needed for embeddings and semantic search. See [`.env.example`](.env.example). A key created through MongoDB Atlas's "Model API Key" flow authenticates against `ai.mongodb.com`, not `api.voyageai.com`, and `VoyageClient::ENDPOINT` is set for that Atlas-issued path.
 - `NGROK_HOST`: optional, the full tunnel URL (for example `https://abc.ngrok-free.app`) when connecting Claude through a tunnel. The gem's DNS-rebinding protection (`allowed_hosts`, `allowed_origins`) matches **exact strings**, not regular expressions. `allowed_hosts` needs a bare hostname and `allowed_origins` needs scheme plus host, so [`config/routes.rb`](config/routes.rb) derives one from the other.
@@ -367,7 +368,7 @@ The project began on SQLite and moved to PostgreSQL because pgvector has no SQLi
 
 ## Status
 
-A working learning project, not production software. It is not a full store backend and it has no authentication.
+A working learning project, not production software, and not a full store backend.
 
 Known limitations:
 
@@ -385,8 +386,6 @@ Not built here, in case you want to extend it: resource subscriptions, sampling,
 The code is released under the [MIT License](LICENSE).
 
 ## Related work
-
-Related projects:
 
 - [`product_geo_agent`](https://github.com/mjesar/product_geo_agent): a Rails CLI agent that scores how discoverable a Shopify product is to AI assistants (agents and tool calling).
 - [`ai_shop_assistant`](https://github.com/mjesar/ai_shop_assistant): a shopping chat assistant that calls Shopify's live Catalog API over MCP (the client side of what this repo serves).

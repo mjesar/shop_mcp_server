@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="320" viewBox="0 0 1200 320" role="img" aria-labelledby="t d">
   <title id="t">Shop MCP Server</title>
-  <desc id="d">A Ruby on Rails MCP server that lets an AI assistant read a store's products, orders and inventory, and search products by meaning. An AI client calls tools on the Rails server, which queries PostgreSQL with pgvector. Dark green banner on a field of dots, signed with the mjesar mark in the bottom-right corner.</desc>
+  <desc id="d">A Ruby on Rails MCP server that connects a Rails app to AI assistants. The example app is a store: the assistant reads its products, orders and inventory, and searches products by meaning. An AI client calls tools on the Rails server, which queries PostgreSQL with pgvector. Dark green banner on a field of dots, signed with the mjesar mark in the bottom-right corner.</desc>
   <defs>
     <marker id="a" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
       <path d="M0 0 L10 5 L0 10 z" fill="#c41e4a"/>
@@ -38,7 +38,7 @@
       <text x="64" y="86" font-size="18" font-weight="600" letter-spacing="3" fill="#4fae7b">MCP  ·  RAILS  ·  RAG</text>
       <text x="64" y="172" font-size="76" font-weight="600" fill="#edf1ed">Shop <tspan fill="#e0476f">MCP</tspan> Server</text>
       <rect x="66" y="196" width="72" height="4" rx="2" fill="#c41e4a"/>
-      <text x="64" y="244" font-size="26" fill="#b7c4bb">Give an AI assistant real access to a store.</text>
+      <text x="64" y="244" font-size="26" fill="#b7c4bb">Connect your Rails app to AI assistants.</text>
       <text x="64" y="282" font-size="18" fill="#7f9186">A Ruby on Rails MCP server with semantic search on pgvector.</text>
     </g>
 
