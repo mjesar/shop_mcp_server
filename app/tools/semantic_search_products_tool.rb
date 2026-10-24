@@ -17,11 +17,16 @@ class SemanticSearchProductsTool < MCP::Tool
     required: [ "query" ]
   )
 
+  # Cosine distance above which a product is too unrelated to return. Real matches in the
+  # seed catalog score 0.24 to 0.38, unrelated ones 0.53 and up ("gaming keyboard" -> desk lamp).
+  MAX_DISTANCE = 0.5
+
   class << self
     def call(query:, limit: 5, server_context:)
       begin
         text = VoyageClient.call([ query ]).first
         result = Product.nearest_neighbors(:embedding, text, distance: "cosine").first(limit)
+        result = result.select { |product| product.neighbor_distance <= MAX_DISTANCE }
         response = result.map do |product|
           { title: product.title, description: product.description, price: product.price }
         end
