@@ -13,7 +13,6 @@ class InventoryCheckPrompt < MCP::Prompt
 
   class << self
     def template(args, server_context:)
-      Rails.logger.info "PROMPT ARGS: #{args.inspect}"
       threshold = args[:threshold] || "5"
 
       MCP::Prompt::Result.new(
