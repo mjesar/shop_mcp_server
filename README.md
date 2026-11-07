@@ -152,7 +152,7 @@ Other ways to try it:
 
 - **Straight from Ruby**, which is cheapest and skips the protocol: `bin/rails runner 'pp GetProductTool.call(sku: "SCF-001", server_context: {})'`. This does not prove argument validation works, so use curl for that.
 - **MCP Inspector**: run `npx @modelcontextprotocol/inspector`, add a server with transport **Streamable HTTP** and URL `http://localhost:3000/mcp`.
-- **Claude as a real client**: Claude connects from Anthropic's cloud, so `localhost` will not work. Expose the server first (for example `ngrok http 3000`), set `NGROK_HOST` in `.env`, then add a custom connector pointing at `https://<your-tunnel-url>/mcp`.
+- **Claude as a real client**: Claude connects from Anthropic's cloud, so `localhost` will not work. Expose the server first (for example `ngrok http 3000`), set `NGROK_HOST` and `MCP_AUTH_TOKEN` in `.env`, then add a custom connector pointing at `https://<your-tunnel-url>/mcp`. On the connector form choose "No sign-in" and, under "Request headers", choose `authorization` with the value `Bearer <your-token>`. Check that the space after `Bearer` is still there once the token is in, because a value without it is rejected with a 401.
 
 ## How it works
 
@@ -341,7 +341,7 @@ This project uses the official `mcp` gem from `modelcontextprotocol`. It is a di
 It may not be authentication. If your server only supports the legacy SSE transport, Claude's Streamable HTTP probe can get a 405 and be reported as an auth failure. That is what happened here, so check the transport first.
 
 #### How do I connect a local MCP server to Claude?
-Claude connects from Anthropic's cloud, so `localhost` does not work. Tunnel the server (for example with `ngrok http 3000`), set `NGROK_HOST`, and add a custom connector pointing at `https://<your-tunnel-url>/mcp`.
+Claude connects from Anthropic's cloud, so `localhost` does not work. Tunnel the server (for example with `ngrok http 3000`), set `NGROK_HOST` and `MCP_AUTH_TOKEN`, and add a custom connector pointing at `https://<your-tunnel-url>/mcp`, with `authorization` set to `Bearer <your-token>` under "Request headers".
 
 #### How do I add semantic search to a Rails app?
 Embed your text with an embeddings API, store the vector in a pgvector column, and query it with the `neighbor` gem. The steps and code are in [Semantic search (RAG)](#semantic-search-rag) above.
@@ -355,12 +355,14 @@ The requirements are in [Quick start](#quick-start). The app uses PostgreSQL's d
 
 - `VOYAGE_API_KEY`: needed for embeddings and semantic search. See [`.env.example`](.env.example). A key created through MongoDB Atlas's "Model API Key" flow authenticates against `ai.mongodb.com`, not `api.voyageai.com`, and `VoyageClient::ENDPOINT` is set for that Atlas-issued path.
 - `NGROK_HOST`: optional, the full tunnel URL (for example `https://abc.ngrok-free.app`) when connecting Claude through a tunnel. The gem's DNS-rebinding protection (`allowed_hosts`, `allowed_origins`) matches **exact strings**, not regular expressions. `allowed_hosts` needs a bare hostname and `allowed_origins` needs scheme plus host, so [`config/routes.rb`](config/routes.rb) derives one from the other.
+- `MCP_AUTH_TOKEN`: the shared bearer token for `/mcp`. Generate one with `openssl rand -hex 64`. Once it is set, every request must send `Authorization: Bearer <token>`, including the curl and MCP Inspector checks on `localhost`. The app refuses to boot without it in production or when `NGROK_HOST` is set, because a server that can be reached from outside should never run open by accident. Plain local use without a tunnel needs no token.
+- `APP_HOST`: production only, the bare hostname the app is served from (for example `shop.example.com`). The app refuses to boot in production without it. It sets the allowed host in Rails and the allowed host and HTTPS origin on the MCP transport. Production also assumes an HTTPS proxy in front of the app, because `assume_ssl` and `force_ssl` are on.
 
 The project began on SQLite and moved to PostgreSQL because pgvector has no SQLite equivalent for this gem stack. If you do not need semantic search, the other six tools do not depend on pgvector.
 
 ## Tech stack
 
-- Ruby 4.0.4 and Rails 8.1.4
+- Ruby 4.0.4 and Rails 8.1.4.1
 - [`mcp`](https://github.com/modelcontextprotocol/ruby-sdk) 1.8.1, the official Ruby SDK
 - PostgreSQL 18 with pgvector, via the [`neighbor`](https://github.com/ankane/neighbor) gem 1.2.0
 - [Voyage AI](https://www.voyageai.com/) `voyage-3.5-lite`, 512-dimension embeddings
@@ -373,7 +375,7 @@ A working learning project, not production software, and not a full store backen
 Known limitations:
 
 - **Sessions are in memory and single-process.** `StreamableHTTPTransport` stores sessions in a plain Hash with no pluggable store, so even multiple Puma workers break it, and a restart drops every session. The official Python and TypeScript SDKs share this design, and the newest MCP spec revision (2026-07-28) moves toward a stateless model to fix it.
-- **No authentication.** Every caller is treated the same. Fine locally, not for a real deployment. While the server runs behind an ngrok tunnel, anyone with the URL can call every tool, including `create_order_tool`. `mcp` 1.8.0 added OAuth 2.1 resource server support to `StreamableHTTPTransport`, so that is the natural next step.
+- **One shared token, not per-user accounts.** Everyone with `MCP_AUTH_TOKEN` can call every tool, including `create_order_tool`, and there is no rate limiting. `mcp` 1.8.0 added OAuth 2.1 resource server support to `StreamableHTTPTransport`, so that is the natural next step for per-user access.
 - **No live push.** `resources/subscribe` is not wired up, so a client re-reads a resource to see fresh data.
 - **Type-only schema validation.** `input_schema` is plain JSON Schema, so tools guard against missing or bad input themselves.
 - **Semantic search and the backfill task have no specs.** Both have only been checked by hand, in the [real runs](#real-runs) and the demo.

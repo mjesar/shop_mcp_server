@@ -38,9 +38,13 @@ class CreateOrderTool < MCP::Tool
         ActiveRecord::Base.transaction do
           order = Order.create!(customer_name: customer_name, customer_email: customer_email, status: "pending")
 
+          # Lock every product up front, always in id order, so two orders sharing
+          # products wait for each other instead of deadlocking or overselling.
+          line_items = line_items.map(&:symbolize_keys)
+          products = Product.where(sku: line_items.pluck(:sku)).order(:id).lock.index_by(&:sku)
+
           line_items.each do |line|
-            line = line.symbolize_keys
-            product = Product.find_by(sku: line[:sku])
+            product = products[line[:sku]]
             raise ArgumentError, "Unknown SKU: #{line[:sku]}" unless product
             raise ArgumentError, "Insufficient stock for #{product.sku}" if product.stock_quantity < line[:quantity]
 

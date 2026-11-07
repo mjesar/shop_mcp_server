@@ -11,11 +11,13 @@ server = MCP::Server.new(
 
 ngrok_url = ENV.fetch("NGROK_HOST", nil)
 ngrok_host = ngrok_url && URI(ngrok_url).host
+app_host = ENV["APP_HOST"].presence
 
 transport = MCP::Server::Transports::StreamableHTTPTransport.new(
   server,
-  allowed_hosts: [ ngrok_host ].compact,
-  allowed_origins: [ ngrok_url ].compact,
+  allowed_hosts: [ ngrok_host, app_host ].compact,
+  allowed_origins: [ ngrok_url, app_host && "https://#{app_host}" ].compact,
+  token_verifier: McpTokenVerifier.from_env,
 )
 
 Rails.application.routes.draw do
