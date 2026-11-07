@@ -356,12 +356,13 @@ The requirements are in [Quick start](#quick-start). The app uses PostgreSQL's d
 - `VOYAGE_API_KEY`: needed for embeddings and semantic search. See [`.env.example`](.env.example). A key created through MongoDB Atlas's "Model API Key" flow authenticates against `ai.mongodb.com`, not `api.voyageai.com`, and `VoyageClient::ENDPOINT` is set for that Atlas-issued path.
 - `NGROK_HOST`: optional, the full tunnel URL (for example `https://abc.ngrok-free.app`) when connecting Claude through a tunnel. The gem's DNS-rebinding protection (`allowed_hosts`, `allowed_origins`) matches **exact strings**, not regular expressions. `allowed_hosts` needs a bare hostname and `allowed_origins` needs scheme plus host, so [`config/routes.rb`](config/routes.rb) derives one from the other.
 - `MCP_AUTH_TOKEN`: the shared bearer token for `/mcp`. Generate one with `bin/rails secret`. Once it is set, every request must send `Authorization: Bearer <token>`, including the curl and MCP Inspector checks on `localhost`. The app refuses to boot without it in production or when `NGROK_HOST` is set, because a server that can be reached from outside should never run open by accident. Plain local use without a tunnel needs no token.
+- `APP_HOST`: production only, the bare hostname the app is served from (for example `shop.example.com`). The app refuses to boot in production without it. It sets the allowed host in Rails and the allowed host and HTTPS origin on the MCP transport. Production also assumes an HTTPS proxy in front of the app, because `assume_ssl` and `force_ssl` are on.
 
 The project began on SQLite and moved to PostgreSQL because pgvector has no SQLite equivalent for this gem stack. If you do not need semantic search, the other six tools do not depend on pgvector.
 
 ## Tech stack
 
-- Ruby 4.0.4 and Rails 8.1.4
+- Ruby 4.0.4 and Rails 8.1.4.1
 - [`mcp`](https://github.com/modelcontextprotocol/ruby-sdk) 1.8.1, the official Ruby SDK
 - PostgreSQL 18 with pgvector, via the [`neighbor`](https://github.com/ankane/neighbor) gem 1.2.0
 - [Voyage AI](https://www.voyageai.com/) `voyage-3.5-lite`, 512-dimension embeddings
