@@ -16,6 +16,7 @@ transport = MCP::Server::Transports::StreamableHTTPTransport.new(
   server,
   allowed_hosts: [ ngrok_host ].compact,
   allowed_origins: [ ngrok_url ].compact,
+  token_verifier: McpTokenVerifier.from_env,
 )
 
 Rails.application.routes.draw do
