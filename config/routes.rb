@@ -23,5 +23,5 @@ transport = MCP::Server::Transports::StreamableHTTPTransport.new(
 Rails.application.routes.draw do
   get "up" => "rails/health#show", as: :rails_health_check
 
-  mount(transport => "/mcp")
+  mount(McpApiKeyHeader.new(transport) => "/mcp")
 end
