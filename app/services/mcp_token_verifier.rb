@@ -14,7 +14,7 @@ class McpTokenVerifier < MCP::Server::OAuth::TokenVerifier
     return unless reachable_from_outside
 
     raise MissingTokenError,
-      "MCP_AUTH_TOKEN must be set in production or when NGROK_HOST is set. Generate one with: bin/rails secret"
+      "MCP_AUTH_TOKEN must be set in production or when NGROK_HOST is set. Generate one with: openssl rand -hex 64"
   end
 
   def initialize(expected_token)
