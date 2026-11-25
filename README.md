@@ -14,6 +14,8 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue" alt="MIT License"></a>
 </p>
 
+<p align="center">Project page: <a href="https://mjesar.github.io/projects/shop_mcp_server/">mjesar.github.io/projects/shop_mcp_server</a> · Built by <a href="https://mjesar.github.io/">Mohammad Ali Jesar</a></p>
+
 **Shop MCP Server is a Ruby on Rails MCP (Model Context Protocol) server that connects a Rails app to AI assistants such as Claude.** The example app is a small store: the assistant can read its products, orders and inventory, place orders, and search products by meaning. It is for Rails developers who want to see how an MCP server and a small RAG (retrieval-augmented generation) feature work in a real app.
 
 It is built on the [official `mcp` Ruby SDK](https://github.com/modelcontextprotocol/ruby-sdk), PostgreSQL with [pgvector](https://github.com/pgvector/pgvector), and [Voyage AI](https://www.voyageai.com/) embeddings.
